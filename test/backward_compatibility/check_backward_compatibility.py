@@ -59,6 +59,12 @@ allow_list = [
     ("aten::fake_quantize_per_tensor_affine_backward", datetime.date(2021, 2, 20)),
     ("aten::fake_quantize_per_channel_affine_backward", datetime.date(2021, 2, 20)),
     ("aten::rowwise_prune", datetime.date(9999, 1, 1)),
+    ("aten::_var", datetime.date(2021, 2, 28)),
+    ("aten::_std", datetime.date(2021, 2, 28)),
+    ("aten::var", datetime.date(2021, 2, 28)),
+    ("aten::std", datetime.date(2021, 2, 28)),
+    ("aten::var_mean", datetime.date(2021, 2, 28)),
+    ("aten::std_mean", datetime.date(2021, 2, 28)),
 ]
 
 def allow_listed(schema, allow_list):
