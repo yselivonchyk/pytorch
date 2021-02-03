@@ -384,11 +384,6 @@ node [shape=box];
         return qualified_name in self.provided
 
     def _persistent_id(self, obj):
-        # FIXME: the docs say that persistent_id should only return a string
-        # but torch store returns tuples. This works only in the binary protocol
-        # see
-        # https://docs.python.org/2/library/pickle.html#pickling-and-unpickling-external-objects
-        # https://github.com/python/cpython/blob/master/Lib/pickle.py#L527-L537
         if torch.is_storage(obj):
             storage_type = normalize_storage_type(type(obj))
             obj_key = str(obj._cdata)
@@ -400,6 +395,11 @@ node [shape=box];
                     obj_key,
                     location,
                     obj.size())
+        elif isinstance(obj, ImporterProxy):
+            return ('package-importer', )
+        if hasattr(obj, '__torch_package_persist__'):
+            return obj.__torch_package_persist__(self)
+
         return None
 
     def __enter__(self):
@@ -518,3 +518,28 @@ class _GlobGroup:
 
         result = ''.join(component_to_re(c) for c in pattern.split('.'))
         return re.compile(result)
+
+
+class ImporterProxy():
+    """An object that represents the current PackageImporter during the import process.
+
+    When pickled by PackageExporter and then unpickled by PackageImporter,
+    this class will come back as the PackageImporter instance doing the
+    unpickling. This can be used as an argument to __reduce__() to access the
+    current importer in the reduction function.
+
+    e.g.
+
+    class Foo:
+        def __reduce__(self):
+            return my_function, (ImporterProxy(),)
+
+    def my_function(importer: Union[PackageImporter, ImporterProxy]):
+        if isinstance(importer, PackageImporter):
+            # This object is being loaded from a PackageImporter.
+            # Now you can do something with that importer.
+        else:
+            # This object is being unpickled by the default unpickler.
+            # `importer` is just be a regular ImporterProxy.
+    """
+    pass
