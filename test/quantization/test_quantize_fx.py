@@ -1546,15 +1546,15 @@ class TestQuantizeFx(QuantizationTestCase):
         # ensure it is scriptable
         scripted = torch.jit.script(m)
         scripted_keys = scripted.state_dict().keys()
-        self.assertTrue(scripted_keys == keys, "Expected the scripted model to preserve the state_dict")
-        assert hasattr(m, "mods1_0_input_scale_0")
-        assert hasattr(m, "mods1_0_input_zero_point_0")
-        assert hasattr(m, "mods1_0_scale_0")
-        assert hasattr(m, "mods1_0_zero_point_0")
-        assert hasattr(m, "mods1_1_scale_0")
-        assert hasattr(m, "mods1_1_zero_point_0")
-        assert hasattr(m, "mods2_scale_0")
-        assert hasattr(m, "mods2_zero_point_0")
+        setattr(scripted, "mods1_0_packed_weight_0", m.state_dict()["mods1_0_packed_weight_0"])
+        non_packed_weight_keys = [key for key in keys if "_packed_weight" not in key]
+        self.assertTrue(set(scripted_keys) == set(non_packed_weight_keys), "Expected the scripted model to preserve the state_dict for non-packed weight attributes")
+        for attr_name in [
+                "mods1_0_input_scale_0", "mods1_0_input_zero_point_0",
+                "mods1_0_scale_0", "mods1_0_zero_point_0",
+                "mods1_1_scale_0", "mods1_1_zero_point_0",
+                "mods2_scale_0", "mods2_zero_point_0"]:
+            self.assertTrue(hasattr(m, attr_name))
 
     @skipIfNoFBGEMM
     def test_packed_weight_fused_op(self):
@@ -1591,6 +1591,57 @@ class TestQuantizeFx(QuantizationTestCase):
         assert hasattr(m, "mods1_0_packed_weight_0")
         assert hasattr(m, "mods1_1_packed_weight_0")
         assert hasattr(m, "mods2_packed_weight_0")
+
+    def test_state_dict(self):
+        """ Make sure packed params appear in state_dict
+        """
+
+        # test linear packed weight
+        class M1(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.w = torch.rand(4, 30)
+                self.b = torch.rand(4)
+
+            def forward(self, x):
+                return F.linear(x, self.w, self.b)
+
+        m = M1().eval()
+        qconfig_dict = {"": default_qconfig}
+        m = prepare_fx(m, qconfig_dict)
+        m = convert_fx(m)
+        state_dict = m.state_dict()
+        self.assertTrue("_packed_weight_0" in state_dict)
+
+        # test conv packed weight
+        class M2(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.w = torch.rand(3, 3, 3, 3)
+                self.b = torch.rand(3)
+                self.stride = (1, 1)
+                self.padding = (0, 0)
+                self.dilation = (1, 1)
+                self.groups = 1
+
+            def forward(self, x):
+                return F.conv2d(x, self.w, self.b, self.stride, self.padding, self.dilation, self.groups)
+
+        m = M2().eval()
+        qconfig_dict = {"": default_qconfig}
+        m = prepare_fx(m, qconfig_dict)
+        m = convert_fx(m)
+        state_dict = m.state_dict()
+        self.assertTrue("_packed_weight_0" in state_dict)
+
+        # test load
+        ref_weight, ref_bias = torch.ops.quantized.conv2d_unpack(state_dict["_packed_weight_0"])
+        m = M2().eval()
+        m = prepare_fx(m, qconfig_dict)
+        m = convert_fx(m)
+        m.load_state_dict(state_dict)
+        weight, bias = torch.ops.quantized.conv2d_unpack(m._packed_weight_0)
+        self.assertEqual(weight, ref_weight)
 
 @skipIfNoFBGEMM
 class TestQuantizeFxOps(QuantizationTestCase):

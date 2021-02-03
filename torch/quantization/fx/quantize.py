@@ -40,11 +40,12 @@ from .pattern_utils import (
     Pattern,
 )
 
-from .observed_module import (
+from .graph_module import (
     mark_observed_module,
     is_observed_module,
     mark_observed_standalone_module,
     is_observed_standalone_module,
+    QuantizedGraphModule,
 )
 
 from .quantization_patterns import *
@@ -903,7 +904,7 @@ class Quantizer:
 
         # removes qconfig and activation_post_process modules
         _remove_qconfig(model)
-        model = GraphModule(model, act_post_process_removed_graph)
+        model = QuantizedGraphModule(model, act_post_process_removed_graph)
         return model
 
     # Trace back from the weight node util we hit getattr, reconstruct the
@@ -954,7 +955,7 @@ class Quantizer:
             else:
                 # copy other nodes
                 env[node.name] = folded_graph.node_copy(node, load_arg)
-        quantized = GraphModule(quantized_root, folded_graph)
+        quantized = QuantizedGraphModule(quantized_root, folded_graph)
         return quantized
 
     def convert(self, model: GraphModule, debug: bool = False,
