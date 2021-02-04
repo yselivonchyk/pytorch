@@ -2401,6 +2401,118 @@ class TestQuantizedOps(TestCase):
                         msg=(f"Error is too high: SNR(dB): {power}, "
                              f"Signal: {signal}, MSE: {mse}"))
 
+    @override_qengines
+    def test_custom_module_multi_head_attention(self):
+        class MultiheadAttentionModel(torch.nn.Module):
+            def __init__(self, *args, **kwargs):
+                super(MultiheadAttentionModel, self).__init__()
+                self.layer = torch.nn.MultiheadAttention(*args, **kwargs)
+
+            def forward(self, query, key, value, key_padding_mask=None, need_weights=True, attn_mask=None):
+                return self.layer(query, key, value, key_padding_mask, need_weights, attn_mask)
+
+        qengine = torch.backends.quantized.engine
+        # DEBUG: Add 'qnnpack' or 'fbgemm' to skip some of them
+        if qengine in ['qnnpack']:
+            return
+
+        num_heads = 16
+        batch_size = 4
+        target_seq_length = 128
+        source_seq_length = 64
+        embed_dim = 512  # Must be divisible by the number of heads
+
+        dropout = 0  # This is not supported
+
+        Bias = [False, True]
+        Add_bias_kv = [False, True]
+        Add_zero_attn = [False, True]
+
+        dtype = np.uint8
+        qtype = torch.quint8
+
+        custom_module_config = {
+            'float_to_observed_custom_module_class': {
+                torch.nn.MultiheadAttention: torch.nn.quantizable.MultiheadAttention
+            },
+            'observed_to_quantized_custom_module_class': {
+                torch.nn.quantizable.MultiheadAttention: torch.nn.quantizable.MultiheadAttention
+            }
+        }
+
+        fp_data = [
+            torch.randn(target_seq_length, batch_size, embed_dim),  # Q
+            torch.randn(source_seq_length, batch_size, embed_dim),  # K
+            torch.randn(source_seq_length, batch_size, embed_dim)   # V
+        ]
+
+        q_data = []
+        for idx, x in enumerate(fp_data):
+            scale, zero_point = _calculate_dynamic_qparams(x, dtype=dtype)
+            x = x.to(torch.float)
+            qx = torch.quantize_per_tensor(x, scale=scale,
+                                           zero_point=zero_point, dtype=qtype)
+            q_data.append(qx)
+
+            # Dequantize the data back for reference
+            fp_data[idx] = qx.dequantize()
+
+        with torch.no_grad():
+            # DEBUG: Flag to show the quantized model once
+            already_shown = False
+            for bias, add_bias_kv, add_zero_attn in itertools.product(
+                    Bias, Add_bias_kv, Add_zero_attn):
+                # DEBUG: Show qengine + run parameters
+                print(f'{qengine} {bias:>5} {add_bias_kv:>5} {add_zero_attn:>5}', end=' ')
+                # TODO: need to investigate why resetting the bias reduces SNR
+                #       https://github.com/pytorch/pytorch/issues/51662
+                min_power = 20 if (add_bias_kv and add_zero_attn) else 10
+                max_mse = 4 if (add_bias_kv and add_zero_attn) else 10
+
+                mha = MultiheadAttentionModel(embed_dim, num_heads, dropout,
+                                              bias, add_bias_kv, add_zero_attn)
+                mha.eval()
+
+                # Prepare
+                mha.qconfig = torch.quantization.get_default_qconfig(qengine)
+                mha_prepared = torch.quantization.prepare(
+                    mha, prepare_custom_config_dict=custom_module_config)
+
+                # Calibrate
+                y = mha_prepared(*fp_data)
+                y_ref = mha(*fp_data)
+                # Check the result of the prepare
+                self.assertEqual(y_ref[0], y[0])  # Attention
+                self.assertEqual(y_ref[1], y[1])  # Weight
+
+                # Quantize
+                mha_quantized = torch.quantization.convert(
+                    mha_prepared,
+                    convert_custom_config_dict=custom_module_config)
+                qy = mha_quantized(*q_data)
+                # DEBUG: Show the quantized model per qengine
+                if not already_shown:
+                    print(mha_quantized)
+                    already_shown = True
+
+                # Reference result
+                mha.layer = mha_quantized.layer.dequantize()
+                y_ref = mha(*fp_data)
+
+                snr = _snr(y, qy)
+                for signal, mse, power in snr:
+                    # DEBUG: + SNR
+                    print(f'{power:.2f}', end=' ')
+                    self.assertTrue(
+                        power > min_power or mse < max_mse,
+                        msg=(f"Error is too high: SNR(dB): {power}, "
+                             f"Signal: {signal}, MSE: {mse}; "
+                             f"Run with bias={bias}, "
+                             f"add_bias_kv={add_bias_kv}, "
+                             f"add_zero_attn={add_zero_attn}"))
+                # DEBUG:
+                print()
+
 
 class TestDynamicQuantizedLinear(TestCase):
     """Tests the correctness of the dynamic quantized linear and linear_relu op."""
