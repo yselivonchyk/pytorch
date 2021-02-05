@@ -673,7 +673,7 @@ class DistributedDataParallel(Module):
             self.require_backward_grad_sync = old_require_backward_grad_sync
 
     def forward(self, *inputs, **kwargs):
-        self.logger.set_runtime_stats()
+        self.logger.set_runtime_stats_and_log()
         self.reducer.prepare_for_forward()
         if self.ddp_uneven_inputs_config.ddp_join_enabled:
             ones = torch.ones(

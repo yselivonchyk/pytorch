@@ -38,7 +38,7 @@ class Logger {
 #endif
   // Set stats that can be collected only during
   // training loop. It is called at beginning of forward call.
-  void set_runtime_stats();
+  void set_runtime_stats_and_log();
 
  private:
   // ddp_logging_data_ is used to hold all the ddp related logging
